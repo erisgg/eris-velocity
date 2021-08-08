@@ -71,7 +71,7 @@ public class ErisVelocity {
   @Subscribe
   public void onProxyInitialization(ProxyInitializeEvent event) {
     this.server.getScheduler().buildTask(this, () -> this.redisWrapper.set("playercount", this.mapper.createObjectNode()
-        .put("count", this.server.getPlayerCount()))).repeat(100, TimeUnit.MILLISECONDS)
+        .put("count", this.server.getPlayerCount()))).repeat(10, TimeUnit.MILLISECONDS)
         .schedule();
   }
 
