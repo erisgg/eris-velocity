@@ -48,7 +48,6 @@ public class ErisVelocity {
   private final Logger logger;
   private final RedisWrapper redisWrapper;
   private final ObjectMapper mapper;
-
   private final List<UhcGame> games;
 
   @Inject
