@@ -49,4 +49,8 @@ public final class UhcGame {
     Runtime.getRuntime().exec(this.path + "/start uhc-" + this.index);
   }
 
+  public void killServer() throws IOException {
+    Runtime.getRuntime().exec("tmux kill-session -t uhc-" + this.index);
+  }
+
 }

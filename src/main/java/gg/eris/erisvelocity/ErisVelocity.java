@@ -2,13 +2,14 @@ package gg.eris.erisvelocity;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
 import com.google.inject.Inject;
 import com.velocitypowered.api.event.Subscribe;
 import com.velocitypowered.api.event.proxy.ProxyInitializeEvent;
 import com.velocitypowered.api.plugin.Plugin;
 import com.velocitypowered.api.plugin.annotation.DataDirectory;
 import com.velocitypowered.api.proxy.ProxyServer;
+import com.velocitypowered.api.proxy.server.RegisteredServer;
 import com.velocitypowered.api.proxy.server.ServerInfo;
 import gg.eris.commons.core.impl.redis.RedisWrapperImpl;
 import gg.eris.commons.core.redis.RedisWrapper;
@@ -19,9 +20,12 @@ import java.io.InputStream;
 import java.net.InetSocketAddress;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import org.slf4j.Logger;
 
 @Plugin(
@@ -34,6 +38,8 @@ import org.slf4j.Logger;
 )
 public class ErisVelocity {
 
+  private static final String INITIAL_SERVER = "uhc-0";
+
   private static final int MAX_SERVER_COUNT = 5;
 
   private static final int[] PORTS = new int[]{
@@ -45,15 +51,15 @@ public class ErisVelocity {
   };
 
   private final ProxyServer server;
-  private final Logger logger;
   private final RedisWrapper redisWrapper;
   private final ObjectMapper mapper;
-  private final List<UhcGame> games;
+  private final Map<String, UhcGame> games;
+
+  private boolean initialConnection;
 
   @Inject
   public ErisVelocity(ProxyServer server, Logger logger, @DataDirectory Path dataDirectory) {
     this.server = server;
-    this.logger = logger;
 
     try {
       Files.createDirectories(dataDirectory);
@@ -83,7 +89,8 @@ public class ErisVelocity {
     );
 
     this.mapper = new ObjectMapper();
-    this.games = Lists.newArrayList();
+    this.games = Maps.newHashMap();
+    this.initialConnection = false;
   }
 
   @Subscribe
@@ -93,14 +100,49 @@ public class ErisVelocity {
             .put("count", this.server.getPlayerCount()))).repeat(10, TimeUnit.MILLISECONDS)
         .schedule();
 
+    this.server.getScheduler()
+        .buildTask(this, () -> {
+          if (!this.initialConnection) {
+            this.server.getServer(INITIAL_SERVER)
+                .ifPresent(server -> this.initialConnection = true);
+          } else {
+            for (RegisteredServer server : this.server.getAllServers()) {
+              try {
+                server.ping().get(200, TimeUnit.MILLISECONDS);
+              } catch (TimeoutException | InterruptedException | ExecutionException | CancellationException ignored) {
+                ServerInfo info = server.getServerInfo();
+                this.server.unregisterServer(info);
+                String name = info.getName();
+
+                UhcGame game = this.games.get(name);
+                if (game == null) {
+                  continue;
+                }
+
+                try {
+                  game.killServer();
+                  game.copyFiles();
+                  game.startServer();
+                } catch (IOException err) {
+                  err.printStackTrace();
+                }
+              }
+
+            }
+          }
+        })
+        .repeat(10, TimeUnit.MILLISECONDS)
+        .schedule();
+
     for (int i = 0; i < MAX_SERVER_COUNT; i++) {
       try {
         int port = PORTS[i];
         UhcGame game = new UhcGame(i, port);
         game.copyFiles();
         game.startServer();
-        this.server.registerServer(new ServerInfo("uhc-" + i, new InetSocketAddress("localhost", port)));
-        this.games.add(game);
+        this.server
+            .registerServer(new ServerInfo("uhc-" + i, new InetSocketAddress("localhost", port)));
+        this.games.put("uhc-" + i, game);
       } catch (IOException err) {
         err.printStackTrace();
       }
