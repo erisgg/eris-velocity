@@ -141,7 +141,7 @@ public class ErisVelocity {
               continue;
             }
 
-            server.ping().orTimeout(100, TimeUnit.MILLISECONDS)
+            server.ping().orTimeout(5, TimeUnit.SECONDS)
                 .whenComplete((serverPing, throwable) -> {
                   if (throwable != null) {
                     if (!this.started.contains(info.getName())) {
@@ -175,7 +175,8 @@ public class ErisVelocity {
                   }
                 });
           }
-        }).repeat(1, TimeUnit.SECONDS)
+        })
+        .repeat(15, TimeUnit.SECONDS)
         .schedule();
 
   }
