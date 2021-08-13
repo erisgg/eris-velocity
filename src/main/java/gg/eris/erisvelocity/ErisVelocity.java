@@ -108,7 +108,7 @@ public class ErisVelocity {
           } else {
             for (RegisteredServer server : this.server.getAllServers()) {
               try {
-                server.ping().get(200, TimeUnit.MILLISECONDS);
+                server.ping().get(25, TimeUnit.MILLISECONDS);
               } catch (TimeoutException | InterruptedException | ExecutionException | CancellationException ignored) {
                 ServerInfo info = server.getServerInfo();
                 this.server.unregisterServer(info);
