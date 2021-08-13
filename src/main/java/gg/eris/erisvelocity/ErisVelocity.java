@@ -2,9 +2,14 @@ package gg.eris.erisvelocity;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.google.common.cache.Cache;
+import com.google.common.cache.CacheBuilder;
 import com.google.common.collect.Maps;
+import com.google.common.collect.Sets;
 import com.google.inject.Inject;
+import com.velocitypowered.api.event.ResultedEvent.ComponentResult;
 import com.velocitypowered.api.event.Subscribe;
+import com.velocitypowered.api.event.connection.LoginEvent;
 import com.velocitypowered.api.event.proxy.ProxyInitializeEvent;
 import com.velocitypowered.api.plugin.Plugin;
 import com.velocitypowered.api.plugin.annotation.DataDirectory;
@@ -20,12 +25,17 @@ import java.io.InputStream;
 import java.net.InetSocketAddress;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
+import java.time.temporal.ChronoUnit;
 import java.util.Map;
 import java.util.Objects;
-import java.util.concurrent.CancellationException;
-import java.util.concurrent.ExecutionException;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.format.NamedTextColor;
+import net.kyori.adventure.text.format.TextColor;
+import net.kyori.adventure.text.format.TextDecoration;
+import net.kyori.adventure.text.format.TextDecoration.State;
 import org.slf4j.Logger;
 
 @Plugin(
@@ -38,7 +48,7 @@ import org.slf4j.Logger;
 )
 public class ErisVelocity {
 
-  private static final String INITIAL_SERVER = "uhc-0";
+  private static final Duration START_TIME = Duration.of(60, ChronoUnit.SECONDS);
 
   private static final int MAX_SERVER_COUNT = 5;
 
@@ -51,15 +61,18 @@ public class ErisVelocity {
   };
 
   private final ProxyServer server;
+  private final Logger logger;
   private final RedisWrapper redisWrapper;
   private final ObjectMapper mapper;
   private final Map<String, UhcGame> games;
 
-  private boolean initialConnection;
+  private final Set<String> started;
+  private final Cache<String, Boolean> starting;
 
   @Inject
   public ErisVelocity(ProxyServer server, Logger logger, @DataDirectory Path dataDirectory) {
     this.server = server;
+    this.logger = logger;
 
     try {
       Files.createDirectories(dataDirectory);
@@ -76,6 +89,8 @@ public class ErisVelocity {
       this.redisWrapper = null;
       this.mapper = null;
       this.games = null;
+      this.started = null;
+      this.starting = null;
       err.printStackTrace();
       return;
     }
@@ -90,7 +105,11 @@ public class ErisVelocity {
 
     this.mapper = new ObjectMapper();
     this.games = Maps.newHashMap();
-    this.initialConnection = false;
+    this.started = Sets.newConcurrentHashSet();
+    this.starting = CacheBuilder.newBuilder()
+        .expireAfterWrite(START_TIME)
+        .concurrencyLevel(1)
+        .build();
   }
 
   @Subscribe
@@ -98,40 +117,6 @@ public class ErisVelocity {
     this.server.getScheduler()
         .buildTask(this, () -> this.redisWrapper.set("playercount", this.mapper.createObjectNode()
             .put("count", this.server.getPlayerCount()))).repeat(10, TimeUnit.MILLISECONDS)
-        .schedule();
-
-    this.server.getScheduler()
-        .buildTask(this, () -> {
-          if (!this.initialConnection) {
-            this.server.getServer(INITIAL_SERVER)
-                .ifPresent(server -> this.initialConnection = true);
-          } else {
-            for (RegisteredServer server : this.server.getAllServers()) {
-              try {
-                server.ping().get(25, TimeUnit.MILLISECONDS);
-              } catch (TimeoutException | InterruptedException | ExecutionException | CancellationException ignored) {
-                ServerInfo info = server.getServerInfo();
-                this.server.unregisterServer(info);
-                String name = info.getName();
-
-                UhcGame game = this.games.get(name);
-                if (game == null) {
-                  continue;
-                }
-
-                try {
-                  game.killServer();
-                  game.copyFiles();
-                  game.startServer();
-                } catch (IOException err) {
-                  err.printStackTrace();
-                }
-              }
-
-            }
-          }
-        })
-        .repeat(10, TimeUnit.MILLISECONDS)
         .schedule();
 
     for (int i = 0; i < MAX_SERVER_COUNT; i++) {
@@ -146,6 +131,67 @@ public class ErisVelocity {
       } catch (IOException err) {
         err.printStackTrace();
       }
+    }
+
+    this.server.getScheduler()
+        .buildTask(this, () -> {
+          for (RegisteredServer server : this.server.getAllServers()) {
+            ServerInfo info = server.getServerInfo();
+            if (!info.getName().startsWith("uhc-")) {
+              continue;
+            }
+
+            server.ping().orTimeout(100, TimeUnit.MILLISECONDS)
+                .whenComplete((serverPing, throwable) -> {
+                  if (throwable != null) {
+                    if (!this.started.contains(info.getName())) {
+                      return;
+                    }
+
+                    Boolean restarting = this.starting.getIfPresent(info.getName());
+                    if (restarting != null) {
+                      return;
+                    }
+
+                    UhcGame game = this.games.get(info.getName());
+                    try {
+                      this.starting.put(info.getName(), true);
+                      game.killServer();
+                      game.copyFiles();
+                      game.startServer();
+                      this.logger.info("Restarting " + info.getName());
+                    } catch (IOException err) {
+                      err.printStackTrace();
+                    }
+                  } else {
+                    if (this.started.add(info.getName())) {
+                      this.logger.info("Loaded " + info.getName());
+                    } else {
+                      if (this.starting.getIfPresent(info.getName()) != null) {
+                        this.starting.invalidate(info.getName());
+                        this.logger.info("Restarted " + info.getName());
+                      }
+                    }
+                  }
+                });
+          }
+        }).repeat(1, TimeUnit.SECONDS)
+        .schedule();
+
+  }
+
+  @Subscribe
+  public void onPlayerJoin(LoginEvent event) {
+    if (this.started.size() != MAX_SERVER_COUNT) {
+      event.setResult(ComponentResult.denied(
+          Component.text("(!)")
+              .color(TextColor.color(NamedTextColor.GOLD))
+              .decoration(TextDecoration.BOLD, State.TRUE)
+              .append(Component.text(" Eris is still starting")
+                  .color(TextColor.color(NamedTextColor.YELLOW)))
+      ));
+      this.logger.warn("Player tried to join when only " + this.started.size()
+          + " servers are loaded.");
     }
   }
 
