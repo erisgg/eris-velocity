@@ -10,9 +10,13 @@ import com.google.inject.Inject;
 import com.velocitypowered.api.event.ResultedEvent.ComponentResult;
 import com.velocitypowered.api.event.Subscribe;
 import com.velocitypowered.api.event.connection.LoginEvent;
+import com.velocitypowered.api.event.permission.PermissionsSetupEvent;
 import com.velocitypowered.api.event.proxy.ProxyInitializeEvent;
+import com.velocitypowered.api.permission.PermissionSubject;
+import com.velocitypowered.api.permission.Tristate;
 import com.velocitypowered.api.plugin.Plugin;
 import com.velocitypowered.api.plugin.annotation.DataDirectory;
+import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.proxy.ProxyServer;
 import com.velocitypowered.api.proxy.server.RegisteredServer;
 import com.velocitypowered.api.proxy.server.ServerInfo;
@@ -27,6 +31,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.time.temporal.ChronoUnit;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -68,6 +73,19 @@ public class ErisVelocity {
 
   private final Set<String> started;
   private final Cache<String, Boolean> starting;
+
+  private static final Set<String> SERVERS = Set.of(
+      "alfie",
+      "aifle",
+      "actness",
+      "nonhotdog",
+      "ieonphie",
+      "twoclicked",
+      "devuls",
+      "appleciderisgud",
+      "olimxn",
+      "hughjph"
+  );
 
   @Inject
   public ErisVelocity(ProxyServer server, Logger logger, @DataDirectory Path dataDirectory) {
@@ -194,6 +212,20 @@ public class ErisVelocity {
       this.logger.warn("Player tried to join when only " + this.started.size()
           + " servers are loaded.");
     }
+  }
+
+  @Subscribe
+  public void onPermissionCalculate(PermissionsSetupEvent event) {
+    event.createFunction(value -> {
+      if (value.equals("velocity.command.server")) {
+        if (event.getSubject() instanceof Player) {
+          Player player = (Player) event.getSubject();
+          return SERVERS.contains(player.getUsername().toLowerCase(Locale.ROOT)) ?
+              Tristate.TRUE : Tristate.FALSE;
+        }
+      }
+      return Tristate.FALSE;
+    });
   }
 
   private File getConfigFile(Path path) {
