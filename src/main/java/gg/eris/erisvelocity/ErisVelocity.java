@@ -12,6 +12,8 @@ import com.velocitypowered.api.event.Subscribe;
 import com.velocitypowered.api.event.connection.LoginEvent;
 import com.velocitypowered.api.event.permission.PermissionsSetupEvent;
 import com.velocitypowered.api.event.proxy.ProxyInitializeEvent;
+import com.velocitypowered.api.permission.PermissionFunction;
+import com.velocitypowered.api.permission.PermissionProvider;
 import com.velocitypowered.api.permission.PermissionSubject;
 import com.velocitypowered.api.permission.Tristate;
 import com.velocitypowered.api.plugin.Plugin;
@@ -216,16 +218,26 @@ public class ErisVelocity {
 
   @Subscribe
   public void onPermissionCalculate(PermissionsSetupEvent event) {
-    event.createFunction(value -> {
-      if (value.equals("velocity.command.server")) {
-        if (event.getSubject() instanceof Player) {
-          Player player = (Player) event.getSubject();
-          return SERVERS.contains(player.getUsername().toLowerCase(Locale.ROOT)) ?
-              Tristate.TRUE : Tristate.FALSE;
+    if (event.getSubject() instanceof Player) {
+      event.setProvider(new PermissionProvider() {
+        @Override
+        public PermissionFunction createFunction(PermissionSubject permissionSubject) {
+          return new PermissionFunction() {
+            @Override
+            public Tristate getPermissionValue(String s) {
+              if (s.equals("velocity.command.server")) {
+                return SERVERS.contains(((Player) event.getSubject()).getUsername().toLowerCase(
+                    Locale.ROOT)) ? Tristate.TRUE : Tristate.FALSE;
+              } else {
+                return Tristate.FALSE;
+              }
+            }
+          };
         }
-      }
-      return Tristate.FALSE;
-    });
+      });
+    }
+
+
   }
 
   private File getConfigFile(Path path) {
